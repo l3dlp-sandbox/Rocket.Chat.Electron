@@ -1,7 +1,7 @@
+import { ipcRenderer } from 'electron';
 import { EventEmitter } from 'events';
 import servers from './servers';
-import sidebar from './sidebar';
-import { desktopCapturer, ipcRenderer } from 'electron';
+
 
 class WebView extends EventEmitter {
 	constructor() {
@@ -13,46 +13,20 @@ class WebView extends EventEmitter {
 			this.add(host);
 		});
 
-		servers.on('host-added', (hostUrl) => {
-			this.add(servers.get(hostUrl));
-		});
-
-		servers.on('host-removed', (hostUrl) => {
-			this.remove(hostUrl);
-		});
-
-		servers.on('active-setted', (hostUrl) => {
-			this.setActive(hostUrl);
-		});
-
-		servers.on('active-cleared', (hostUrl) => {
-			this.deactiveAll(hostUrl);
-		});
-
-		servers.once('loaded', () => {
-			this.loaded();
-		});
-
-		ipcRenderer.on('screenshare-result', (e, result) => {
+		ipcRenderer.on('screenshare-result', (e, id) => {
 			const webviewObj = this.getActive();
 			webviewObj.executeJavaScript(`
-                window.parent.postMessage({
-                    sourceId: '${ result }'
-                }, '*')
-            `);
+				window.parent.postMessage({ sourceId: '${ id }' }, '*');
+			`);
 		});
 	}
 
 	loaded() {
-		document.querySelector('#loading').style.display = 'none';
-		document.querySelector('#login-card').style.display = 'block';
-		document.querySelector('footer').style.display = 'block';
+		document.querySelector('.app-page').classList.remove('app-page--loading');
 	}
 
 	loading() {
-		document.querySelector('#loading').style.display = 'block';
-		document.querySelector('#login-card').style.display = 'none';
-		document.querySelector('footer').style.display = 'none';
+		document.querySelector('.app-page').classList.add('app-page--loading');
 	}
 
 	add(host) {
@@ -62,8 +36,9 @@ class WebView extends EventEmitter {
 		}
 
 		webviewObj = document.createElement('webview');
+		webviewObj.classList.add('webview');
 		webviewObj.setAttribute('server', host.url);
-		webviewObj.setAttribute('preload', './preload.js');
+		webviewObj.setAttribute('preload', '../preload.js');
 		webviewObj.setAttribute('allowpopups', 'on');
 		webviewObj.setAttribute('disablewebsecurity', 'on');
 
@@ -81,42 +56,22 @@ class WebView extends EventEmitter {
 			this.emit(`ipc-message-${ event.channel }`, host.url, event.args);
 
 			switch (event.channel) {
-				case 'title-changed':
-					servers.setHostTitle(host.url, event.args[0]);
-					break;
-				case 'unread-changed':
-					sidebar.setBadge(host.url, event.args[0]);
-					break;
-				case 'focus':
-					servers.setActive(host.url);
-					break;
 				case 'get-sourceId':
-					desktopCapturer.getSources({ types: ['window', 'screen'] }, (error, sources) => {
-						if (error) {
-							throw error;
-						}
-
-						sources = sources.map((source) => {
-							source.thumbnail = source.thumbnail.toDataURL();
-							return source;
-						});
-						ipcRenderer.send('screenshare', sources);
-					});
+					ipcRenderer.send('open-screenshare-dialog');
 					break;
-				case 'reload-server':
-					const active = this.getActive();
-					const server = active.getAttribute('server');
+				case 'reload-server': {
+					const webviewObj = this.getByUrl(host.url);
+					const server = webviewObj.getAttribute('server');
 					this.loading();
-					active.loadURL(server);
+					webviewObj.loadURL(server);
 					break;
-				case 'sidebar-background':
-					sidebar.changeSidebarColor(event.args[0]);
-					break;
+				}
 			}
 		});
 
 		webviewObj.addEventListener('dom-ready', () => {
-			this.emit('dom-ready', host.url);
+			webviewObj.classList.add('ready');
+			this.emit('dom-ready', webviewObj, host.url);
 		});
 
 		webviewObj.addEventListener('did-fail-load', (e) => {
@@ -202,6 +157,21 @@ class WebView extends EventEmitter {
 
 	goForward() {
 		this.getActive().goForward();
+	}
+
+	setSidebarPaddingEnabled(enabled) {
+		if (process.platform !== 'darwin') {
+			return;
+		}
+
+		Array.from(document.querySelectorAll('webview.ready'))
+			.filter((webviewObj) => webviewObj.insertCSS)
+			.forEach((webviewObj) => webviewObj.insertCSS(`
+				.sidebar {
+					padding-top: ${ enabled ? '10px' : '0' };
+					transition: margin .5s ease-in-out;
+				}
+			`));
 	}
 }
 
